@@ -25,115 +25,80 @@ namespace CodeLuau
 		/// Register a speaker
 		/// </summary>
 		/// <returns>speakerID</returns>
-		public RegisterResponse Register(IRepository repository)
-		{
-			int? speakerId = null;
-
-            var error = ValidateData();
-            if (error != null) return new RegisterResponse(error);
-
-            var preferredEmployers = new List<string>() { "Pluralsight", "Microsoft", "Google" };
-
-            bool speakerIsQualified = YearsOfExperience > 10 || HasBlog || Certifications.Count() > 3 || preferredEmployers.Contains(Employer);
-
-            if (!speakerIsQualified)
-            {
-                //need to get just the domain from the email
-                string emailDomain = Email.Split('@').Last();
-
-
-                var domains = new List<string>() { "aol.com", "prodigy.com", "compuserve.com" };
-                if (!domains.Contains(emailDomain) && (!(Browser.Name == WebBrowser.BrowserName.InternetExplorer && Browser.MajorVersion < 9)))
-                {
-                    speakerIsQualified = true;
-                }
-            }
-
-            if (speakerIsQualified)
-            {
-                bool approved = false;
-
-                if (Sessions.Count() != 0)
-                {
-                    foreach (var session in Sessions)
-                    {
-                        var ot = new List<string>() { "Cobol", "Punch Cards", "Commodore", "VBScript" };
-                        foreach (var tech in ot)
-                        {
-                            if (session.Title.Contains(tech) || session.Description.Contains(tech))
-                            {
-                                session.Approved = false;
-                                break;
-                            }
-                            else
-                            {
-                                session.Approved = true;
-                                approved = true;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    return new RegisterResponse(RegisterError.NoSessionsProvided);
-                }
-
-                if (approved)
-                {
-                    //if we got this far, the speaker is approved
-                    //let's go ahead and register him/her now.
-                    //First, let's calculate the registration fee. 
-                    //More experienced speakers pay a lower fee.
-                    if (YearsOfExperience <= 1)
-                    {
-                        RegistrationFee = 500;
-                    }
-                    else if (YearsOfExperience >= 2 && YearsOfExperience <= 3)
-                    {
-                        RegistrationFee = 250;
-                    }
-                    else if (YearsOfExperience >= 4 && YearsOfExperience <= 5)
-                    {
-                        RegistrationFee = 100;
-                    }
-                    else if (YearsOfExperience >= 6 && YearsOfExperience <= 9)
-                    {
-                        RegistrationFee = 50;
-                    }
-                    else
-                    {
-                        RegistrationFee = 0;
-                    }
-
-
-                    //Now, save the speaker and sessions to the db.
-                    try
-                    {
-                        speakerId = repository.SaveSpeaker(this);
-                    }
-                    catch (Exception e)
-                    {
-                        //in case the db call fails 
-                    }
-                }
-                else
-                {
-                    return new RegisterResponse(RegisterError.NoSessionsApproved);
-                }
-            }
-            else
-            {
-                return new RegisterResponse(RegisterError.SpeakerDoesNotMeetStandards);
-            }
-
-            //if we got this far, the speaker is registered.
-            return new RegisterResponse((int)speakerId);
-		}
-        private RegisterError? ValidateData()
+		public SpeakerRegistration SetRegistrationStatus(IRepository repository)
         {
-            if (string.IsNullOrWhiteSpace(FirstName)) return RegisterError.FirstNameRequired;
-            if (string.IsNullOrWhiteSpace(LastName)) return RegisterError.LastNameRequired;
-            if (string.IsNullOrWhiteSpace(Email)) return RegisterError.EmailRequired;
+            var error = ValidateRegistration();
+            if (error != null) return new SpeakerRegistration(error);
+            int? speakerId = repository.SaveSpeaker(this);
+            return new SpeakerRegistration((int)speakerId);
+        }
+
+        private RegistrationStatus? ValidateRegistration()
+        {
+            var error = ValidateData();
+            if (error != null) return error;
+           
+            bool speakerIsQualified = SpeakerAppearsExceptional() || !HasObviousRedFlags();
+            if (!speakerIsQualified) return RegistrationStatus.SpeakerDoesNotMeetStandards;
+            
+            bool atLeastOneSessionApproved = isOneSessionApproved();
+            if (!atLeastOneSessionApproved) return RegistrationStatus.NoSessionsApproved;
+            
+            return null;
+        }
+
+        private bool isOneSessionApproved()
+        {
+            foreach (var sessionTopic in Sessions)
+            {
+                sessionTopic.Approved = !SessionIsAboutOldTechnology(sessionTopic);
+            }
+
+            return Sessions.Any(s => s.Approved);
+        }
+       
+        private bool SessionIsAboutOldTechnology(Session sessionTopic)
+        {
+            var oldTechnologies = new List<string>() { "Cobol", "Punch Cards", "Commodore", "VBScript" };
+            foreach (var tech in oldTechnologies)
+            {
+                if (sessionTopic.Title.Contains(tech) || sessionTopic.Description.Contains(tech))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        private bool HasObviousRedFlags()
+        {
+            //need to get just the domain from the email
+            string emailDomain = Email.Split('@').Last();
+
+                
+            var ancientEmailDomains = new List<string>() { "aol.com", "prodigy.com", "compuserve.com" };
+            if (ancientEmailDomains.Contains(emailDomain)) return true;
+            if (Browser.Name == WebBrowser.BrowserName.InternetExplorer && Browser.MajorVersion < 9) return true;
+            return false;
+        }
+
+        private bool SpeakerAppearsExceptional()
+        {
+            if (YearsOfExperience > 10) return true;
+            if (HasBlog) return true;
+            if (Certifications.Count() > 3) return true;
+            
+            var preferredEmployers = new List<string>() { "Pluralsight", "Microsoft", "Google" };
+            if (preferredEmployers.Contains(Employer)) return true;
+            return false;
+        }
+
+        private RegistrationStatus? ValidateData()
+        {
+            if (string.IsNullOrWhiteSpace(FirstName)) return RegistrationStatus.FirstNameRequired;
+            if (string.IsNullOrWhiteSpace(LastName)) return RegistrationStatus.LastNameRequired;
+            if (string.IsNullOrWhiteSpace(Email)) return RegistrationStatus.EmailRequired;
+            if (!Sessions.Any()) return RegistrationStatus.NoSessionsProvided;
             return null;
         }
 	}
